@@ -14,8 +14,10 @@ let package = Package(
     targets: [
         // Targets are the basic building blocks of a package, defining a module or a test suite.
         // Targets can depend on other targets in this package and products from dependencies.
-        .target(
-            name: "LibXraySPM"),
-
+        .binaryTarget(
+            name: "LibXraySPM",
+            url:"https://github.com/VasiliyShaydullin/LibXraySPM/releases/download/24.10.31/LibXray.xcframework.zip",
+            checksum: "09a6730208a5f45acb0313ea372efa4ecd5ddf3db2cb16113c3ea5ef3653f153"
+        )
     ]
 )
