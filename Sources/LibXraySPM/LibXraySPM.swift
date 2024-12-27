@@ -141,4 +141,11 @@ public struct LibXraySPM {
         return LibXrayConvertShareLinksToXrayJson(config)
     }
     
+    // MARK: - Xray Version
+    
+    public static func version() throws -> CallResponse<String> {
+        let data = LibXrayXrayVersion()
+        return try decodeResult(encodedString: data, dataType: String.self)
+    }
+    
 }
