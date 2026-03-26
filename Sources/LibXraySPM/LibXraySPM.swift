@@ -46,6 +46,10 @@ public struct PingRequest: Codable {
     }
 }
 
+public struct СheckRequest: Codable {
+    public var datDir: String?
+    public var configPath: String?
+}
 
 public struct LibXraySPM {
     
@@ -85,6 +89,71 @@ public struct LibXraySPM {
 //        - success : true
 //        - data : nil
 //        - error : nil
+    }
+    
+    private static func serialization(dataBase64: Data) throws -> [String: Any] {
+        
+        guard let decodedString = String(data: dataBase64, encoding: .utf8) else {
+            throw DecodeError.customError("Failed to decode Base64 data into a valid UTF-8 string.")
+        }
+        
+        guard let jsonData = decodedString.data(using: .utf8) else {
+            throw DecodeError.customError("Failed to convert decoded string to JSON data.")
+        }
+        
+        guard let jsonObject = try? JSONSerialization.jsonObject(with: jsonData, options: []),
+              let jsonDict = jsonObject as? [String: Any] else {
+            throw DecodeError.customError("Failed to parse JSON object from data.")
+        }
+        
+        guard let success = jsonDict["success"] as? Int else {
+            throw DecodeError.customError("Missing or invalid 'success' field in the JSON object.")
+        }
+        
+        guard success == 1 else {
+            if let error = jsonDict["error"] as? String {
+                throw DecodeError.customError("Operation failed with error: \(error)")
+            }
+            throw DecodeError.customError("Operation failed with unknown error.")
+        }
+        
+        guard let dataValue = jsonDict["data"] else {
+            throw DecodeError.customError("Missing 'data' field in the JSON object.")
+        }
+        
+        guard let dataString = dataValue as? String else {
+            throw DecodeError.customError("Field 'data' is not a valid string.")
+        }
+        
+        guard let nestedJsonData = dataString.data(using: .utf8) else {
+            throw DecodeError.customError("Failed to convert 'data' string to JSON data.")
+        }
+        
+        guard let dataDict = try? JSONSerialization.jsonObject(with: nestedJsonData, options: []),
+              let finalDict = dataDict as? [String: Any] else {
+            throw DecodeError.customError("Failed to parse nested JSON object from 'data'.")
+        }
+        
+        return finalDict
+    }
+    
+    private static func serialization(stringBase64: String) throws -> [String: Any] {
+        guard let base64Data = Data(base64Encoded: stringBase64) else {
+            throw DecodeError.unknownError
+        }
+        guard let decodedString = String(data: base64Data, encoding: .utf8) else {
+            throw DecodeError.customError("Failed to decode Base64 data into a valid UTF-8 string.")
+        }
+        
+        guard let jsonData = decodedString.data(using: .utf8) else {
+            throw DecodeError.customError("Failed to convert decoded string to JSON data.")
+        }
+        
+        guard let jsonObject = try? JSONSerialization.jsonObject(with: jsonData, options: []),
+              let jsonDict = jsonObject as? [String: Any] else {
+            throw DecodeError.customError("Failed to parse JSON object from data.")
+        }
+        return jsonDict
     }
     
     // MARK: - Stop
@@ -135,11 +204,11 @@ public struct LibXraySPM {
         throw DecodeError.unknownError
     }
     
-    // MARK: - Convert Config
-    
-    public static func convertLinksToXrayJson(_ config: String) -> String {
-        return LibXrayConvertShareLinksToXrayJson(config)
-    }
+//    // MARK: - Convert Config
+//    
+//    public static func convertLinksToXrayJson(_ config: String) -> String {
+//        return LibXrayConvertShareLinksToXrayJson(config)
+//    }
     
     // MARK: - Xray Version
     
@@ -148,4 +217,130 @@ public struct LibXraySPM {
         return try decodeResult(encodedString: data, dataType: String.self)
     }
     
+    // MARK: - Query Stats
+    
+    public static func stats(_ base64TrafficString: String) throws -> [String: Any] {
+        let data = LibXrayQueryStats(base64TrafficString)
+        guard let base64Data = Data(base64Encoded: data) else {
+            throw DecodeError.unknownError
+        }
+        return try serialization(dataBase64: base64Data)
+    }
+    
+    // MARK: - Test Configuration
+    
+    public static func isValidConfig(datDir: String?, configPath: String?) throws -> Bool {
+        let result: [String: Any] = try checkConfig(datDir: datDir, configPath: configPath)
+        guard let success = result["success"] as? Int else {
+            throw DecodeError.customError("Missing or invalid 'success' field in the JSON object.")
+        }
+        if success == 1 {
+            return true
+        } else if let error = result["error"] as? String {
+            throw DecodeError.customError("Operation failed with error: \(error)")
+        } else {
+            throw DecodeError.customError("Operation failed with unknown error.")
+        }
+    }
+    
+    public static func checkConfig(datDir: String?, configPath: String?) throws -> [String: Any] {
+        let data: String = try checkConfiguration(datDir: datDir, configPath: configPath)
+        
+        return try serialization(stringBase64: data)
+    }
+    
+    public static func checkConfiguration(datDir: String?, configPath: String?) throws -> String {
+        let config = СheckRequest(datDir: datDir, configPath: configPath)
+        return try checkConfiguration(config)
+    }
+    
+    public static func checkConfiguration(_ config: СheckRequest) throws -> String {
+        let jsonData = try JSONEncoder().encode(config)
+        let base64String = jsonData.base64EncodedString()
+        let result = LibXrayTestXray(base64String)
+        return result
+    }
+    
+    // MARK: - Convert Share Links To XrayJson
+    
+    public static func convertShareLinkToString(_ link: String) throws -> String {
+        let result = try convertShareLink(link)
+        if result.success == true, let strJson = result.data {
+            return strJson
+        } else if let error = result.error {
+            throw DecodeError.customError(error)
+        }
+        throw DecodeError.customError("Operation failed with unknown error.")
+    }
+    
+    public static func convertShareLink(_ link: String) throws -> CallResponse<String> {
+        
+        let resultDic = try convertShareLinkToDic(link)
+        if (resultDic["success"] as? Int) == 1, let data = resultDic["data"] {
+            let jsonData = try JSONSerialization.data(withJSONObject: data, options: .prettyPrinted)
+            guard let strJson = String(data: jsonData, encoding: .utf8) else {
+                throw DecodeError.customError("Failed to decode JSON data into a UTF-8 string.")
+            }
+            return CallResponse<String>(success: true, data: strJson, error: nil)
+        } else if (resultDic["success"] as? Int) != 1, let error = resultDic["error"] as? String {
+            return CallResponse<String>(success: false, data: nil, error: error)
+        } else {
+            throw DecodeError.customError("Operation failed with unknown error.")
+        }
+        
+//        guard let linkData = link.data(using: .utf8) else {
+//            throw DecodeError.customError("Invalid configuration string")
+//        }
+//        let base64EncodedConfig = linkData.base64EncodedString()
+//        let xrayJsonString = LibXrayConvertShareLinksToXrayJson(base64EncodedConfig)
+//        return try decodeResult(encodedString: xrayJsonString, dataType: String.self)
+    }
+    
+    public static func convertShareLinkToDic(_ link: String) throws -> [String: Any] {
+        guard let linkData = link.data(using: .utf8) else {
+            throw DecodeError.customError("Invalid configuration string")
+        }
+        let base64EncodedConfig = linkData.base64EncodedString()
+        let xrayJsonString = LibXrayConvertShareLinksToXrayJson(base64EncodedConfig)
+        
+        return try serialization(stringBase64: xrayJsonString)
+    }
+    
+    // MARK: - Convert XrayJson To Share Links
+    
+    public static func convertXrayJsonToLink(_ config: String) throws -> String {
+        let result: CallResponse<String> = try convertXrayJson(config)
+        if result.success == true, let link = result.data {
+            return link
+        } else if let error = result.error {
+            throw DecodeError.customError(error)
+        }
+        throw DecodeError.customError("Operation failed with unknown error.")
+    }
+    
+    public static func convertXrayJson(_ config: String) throws -> CallResponse<String> {
+        guard let configData = config.data(using: .utf8) else {
+            throw DecodeError.customError("Invalid configuration")
+        }
+        let base64EncodedConfig = configData.base64EncodedString()
+        let stringBase64 = LibXrayConvertXrayJsonToShareLinks(base64EncodedConfig)
+        
+        return try decodeResult(encodedString: stringBase64, dataType: String.self)
+    }
+    
+    public static func convertXrayJson(_ config: String) throws -> String {
+        guard let configData = config.data(using: .utf8) else {
+            throw DecodeError.customError("Invalid configuration")
+        }
+        let base64EncodedConfig = configData.base64EncodedString()
+        let stringBase64 = LibXrayConvertXrayJsonToShareLinks(base64EncodedConfig)
+        
+        guard let base64Data = Data(base64Encoded: stringBase64) else {
+            throw DecodeError.unknownError
+        }
+        guard let decodedString = String(data: base64Data, encoding: .utf8) else {
+            throw DecodeError.customError("Failed to decode Base64 data into a valid UTF-8 string.")
+        }
+        return decodedString
+    }
 }
