@@ -1,4 +1,5 @@
 .DS_Store
+/Vless.xcframework/
 /.build
 /Packages
 xcuserdata/

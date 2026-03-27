@@ -4,29 +4,29 @@
 import PackageDescription
 
 let package = Package(
-    name: "LibXraySPM",
+    name: "VlessSPM",
     platforms: [
             .iOS(.v15)
         ],
     products: [
         .library(
-            name: "LibXraySPM",
-            targets: ["LibXraySPM"]
+            name: "VlessSPM",
+            targets: ["VlessSPM"]
         ),
     ],
     targets: [
         .target(
-            name: "LibXraySPM",
-            dependencies: ["LibXray"],
+            name: "VlessSPM",
+            dependencies: ["Vless"],
             path: "Sources/LibXraySPM",
             linkerSettings: [
                 .linkedLibrary("resolv")
             ]
         ),
         .binaryTarget(
-            name: "LibXray",
-            url:"https://github.com/VasiliyShaydullin/LibXraySPM/releases/download/25.12.8/LibXray.xcframework.zip",
-            checksum: "95c9ea1cb7757fe2287e590351401fb44b85b00372a29ef1331fc6685d5ad415"
+            name: "Vless",
+            url: "https://github.com/VasiliyShaydullin/LibXraySPM/releases/download/25.12.8-vless.1/Vless.xcframework.zip",
+            checksum: "cc917a1dce12cb697153a8091bb148826496c43cea9776470aa36d13c301a403"
         )
     ]
 )

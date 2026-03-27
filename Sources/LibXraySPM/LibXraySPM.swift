@@ -1,5 +1,5 @@
 import Foundation
-import LibXray
+import Vless
 
 public struct RunXrayRequest: Codable {
     public var datDir: String?
@@ -344,3 +344,5 @@ public struct LibXraySPM {
         return decodedString
     }
 }
+
+public typealias VlessSPM = LibXraySPM
