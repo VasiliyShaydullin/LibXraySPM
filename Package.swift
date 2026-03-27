@@ -26,7 +26,7 @@ let package = Package(
         .binaryTarget(
             name: "Vless",
             url: "https://github.com/VasiliyShaydullin/LibXraySPM/releases/download/25.12.8-vless.1/Vless.xcframework.zip",
-            checksum: "cc917a1dce12cb697153a8091bb148826496c43cea9776470aa36d13c301a403"
+            checksum: "4b2335a3a57eb0ecb07472ce129cac8015e735ca3532e89982de9bd0998865b5"
         )
     ]
 )
