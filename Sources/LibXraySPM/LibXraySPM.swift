@@ -7,8 +7,11 @@ public struct CallResponse<T: Decodable>: Decodable {
     public let error: String?
 }
 
+extension CallResponse: Sendable where T: Sendable {}
+
 public enum LibXrayError: Error, LocalizedError {
     case invalidRequest
+    case invalidRequestEncoding
     case noResponse
     case invalidResponse
     case operationFailed(String)
@@ -17,6 +20,8 @@ public enum LibXrayError: Error, LocalizedError {
         switch self {
         case .invalidRequest:
             return "The request contains a null character."
+        case .invalidRequestEncoding:
+            return "The encoded request is not valid UTF-8."
         case .noResponse:
             return "libXray returned no response."
         case .invalidResponse:
@@ -27,21 +32,29 @@ public enum LibXrayError: Error, LocalizedError {
     }
 }
 
-public struct EmptyPayload: Encodable {
+public struct EmptyPayload: Encodable, Sendable {
     public init() {}
 }
 
-public struct EmptyResponse: Decodable {}
+public struct EmptyResponse: Decodable, Sendable {}
 
-public struct XrayVersion: Decodable {
+public struct XrayVersion: Decodable, Sendable {
     public let version: String
 }
 
-public struct XrayState: Decodable {
+public struct XrayState: Decodable, Sendable {
     public let running: Bool
 }
 
-public struct PingBatchItem: Encodable {
+public struct SubscriptionText: Decodable, Sendable {
+    public let text: String
+}
+
+public struct ShareLinks: Decodable, Sendable {
+    public let links: String
+}
+
+public struct PingBatchItem: Encodable, Sendable {
     public let xrayJson: String
     public let outboundTag: String?
 
@@ -51,13 +64,13 @@ public struct PingBatchItem: Encodable {
     }
 }
 
-public struct PingBatchResult: Decodable {
+public struct PingBatchResult: Decodable, Sendable {
     public let success: Bool
     public let delay: Int64
     public let error: String?
 }
 
-public struct PingBatchResponse: Decodable {
+public struct PingBatchResponse: Decodable, Sendable {
     public let results: [PingBatchResult]?
 }
 
@@ -86,6 +99,15 @@ private struct PingBatchPayload: Encodable {
     let url: String
 }
 
+private struct AgeDecryptConfig: Encodable {
+    let secretKey: String
+}
+
+private struct TextPayload: Encodable {
+    let text: String
+    let age: AgeDecryptConfig?
+}
+
 public struct LibXraySPM {
     public static func invoke(_ requestJSON: String) throws -> String {
         guard !requestJSON.utf8.contains(0) else {
@@ -111,7 +133,7 @@ public struct LibXraySPM {
         let request = InvokeRequest(method: method, payload: payload)
         let data = try JSONEncoder().encode(request)
         guard let json = String(data: data, encoding: .utf8) else {
-            throw LibXrayError.invalidRequest
+            throw LibXrayError.invalidRequestEncoding
         }
         let response = try invoke(json)
         return try JSONDecoder().decode(CallResponse<Result>.self, from: Data(response.utf8))
@@ -164,6 +186,39 @@ public struct LibXraySPM {
             method: "pingBatch",
             payload: PingBatchPayload(configs: configs, timeout: timeout, url: url),
             dataType: PingBatchResponse.self
+        )
+    }
+
+    public static func decodeSubscriptionText(
+        _ text: String,
+        ageSecretKey: String? = nil
+    ) throws -> CallResponse<SubscriptionText> {
+        try invoke(
+            method: "decodeSubscriptionText",
+            payload: TextPayload(text: text, age: ageSecretKey.map { AgeDecryptConfig(secretKey: $0) }),
+            dataType: SubscriptionText.self
+        )
+    }
+
+    public static func convertShareLinks<Result: Decodable>(
+        _ text: String,
+        ageSecretKey: String? = nil,
+        dataType: Result.Type
+    ) throws -> CallResponse<Result> {
+        try invoke(
+            method: "convertShareLinksToXrayJson",
+            payload: TextPayload(text: text, age: ageSecretKey.map { AgeDecryptConfig(secretKey: $0) }),
+            dataType: dataType
+        )
+    }
+
+    public static func convertXrayJsonToShareLinks(
+        _ xrayJson: String
+    ) throws -> CallResponse<ShareLinks> {
+        try invoke(
+            method: "convertXrayJsonToShareLinks",
+            payload: XrayPayload(xrayJson: xrayJson),
+            dataType: ShareLinks.self
         )
     }
 }

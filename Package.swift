@@ -6,8 +6,10 @@ import PackageDescription
 let package = Package(
     name: "VlessSPM",
     platforms: [
-            .iOS(.v15)
-        ],
+        .iOS(.v15),
+        .macOS(.v13),
+        .tvOS(.v17)
+    ],
     products: [
         .library(
             name: "VlessSPM",
@@ -20,6 +22,8 @@ let package = Package(
             dependencies: ["LibXray"],
             path: "Sources/LibXraySPM",
             linkerSettings: [
+                .linkedFramework("CoreFoundation"),
+                .linkedFramework("Security"),
                 .linkedLibrary("resolv")
             ]
         ),
