@@ -17,16 +17,17 @@ let package = Package(
     targets: [
         .target(
             name: "VlessSPM",
-            dependencies: ["Vless"],
+            dependencies: ["LibXray"],
             path: "Sources/LibXraySPM",
             linkerSettings: [
                 .linkedLibrary("resolv")
             ]
         ),
         .binaryTarget(
-            name: "Vless",
-            url: "https://github.com/VasiliyShaydullin/LibXraySPM/releases/download/25.12.8-vless.1/Vless.xcframework.zip",
-            checksum: "4b2335a3a57eb0ecb07472ce129cac8015e735ca3532e89982de9bd0998865b5"
-        )
+            name: "LibXray",
+            url: "https://github.com/VasiliyShaydullin/LibXraySPM/releases/download/26.11.9/LibXray.xcframework.zip",
+            checksum: "7cf2cd85998cbe4550dd584be7d8bd31f15a4313761e27f5ac94147f88e758d5"
+        ),
+        .testTarget(name: "VlessSPMTests", dependencies: ["VlessSPM"])
     ]
 )

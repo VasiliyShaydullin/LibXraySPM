@@ -1,347 +1,170 @@
 import Foundation
-import Vless
-
-public struct RunXrayRequest: Codable {
-    public var datDir: String?
-    public var configPath: String?
-    public var maxMemory: Int64?
-}
+import LibXray
 
 public struct CallResponse<T: Decodable>: Decodable {
     public let success: Bool
-    public var data: T?
+    public let data: T?
     public let error: String?
 }
 
-public enum DecodeError: Error, LocalizedError {
-    case invalidBase64
-    case customError(String)
-    case unknownError
-    
+public enum LibXrayError: Error, LocalizedError {
+    case invalidRequest
+    case noResponse
+    case invalidResponse
+    case operationFailed(String)
+
     public var errorDescription: String? {
         switch self {
-        case .invalidBase64:
-            return "The provided string is not a valid Base64 encoded string."
-        case .customError(let message):
+        case .invalidRequest:
+            return "The request contains a null character."
+        case .noResponse:
+            return "libXray returned no response."
+        case .invalidResponse:
+            return "libXray returned an invalid response."
+        case .operationFailed(let message):
             return message
-        case .unknownError:
-            return "An unknown error occurred."
         }
     }
 }
 
-public struct PingRequest: Codable {
-    public var datDir: String?
-    public var configPath: String?
-    public var timeout: Int?
-    public var url: String?
-    public var proxy: String?
-    
-    public init(datDir: String?, configPath: String?, timeout: Int?, url: String?, proxy: String?) {
-        self.datDir = datDir
-        self.configPath = configPath
-        self.timeout = timeout
-        self.url = url
-        self.proxy = proxy
+public struct EmptyPayload: Encodable {
+    public init() {}
+}
+
+public struct EmptyResponse: Decodable {}
+
+public struct XrayVersion: Decodable {
+    public let version: String
+}
+
+public struct XrayState: Decodable {
+    public let running: Bool
+}
+
+public struct PingBatchItem: Encodable {
+    public let xrayJson: String
+    public let outboundTag: String?
+
+    public init(xrayJson: String, outboundTag: String? = nil) {
+        self.xrayJson = xrayJson
+        self.outboundTag = outboundTag
     }
 }
 
-public struct СheckRequest: Codable {
-    public var datDir: String?
-    public var configPath: String?
+public struct PingBatchResult: Decodable {
+    public let success: Bool
+    public let delay: Int64
+    public let error: String?
+}
+
+public struct PingBatchResponse: Decodable {
+    public let results: [PingBatchResult]?
+}
+
+private struct InvokeRequest<Payload: Encodable>: Encodable {
+    let apiVersion = 3
+    let method: String
+    let payload: Payload
+}
+
+private struct XrayPayload: Encodable {
+    let xrayJson: String
+}
+
+private struct FreePortsPayload: Encodable {
+    let count: Int
+    let excludePorts: [Int]
+}
+
+private struct FreePortsResponse: Decodable {
+    let ports: [Int]?
+}
+
+private struct PingBatchPayload: Encodable {
+    let configs: [PingBatchItem]
+    let timeout: Int
+    let url: String
 }
 
 public struct LibXraySPM {
-    
-    // MARK: - Run
-    
-    public static func run(datDir: String?, configPath: String?, maxMemory: Int64?) throws -> String {
-        let config = RunXrayRequest(datDir: datDir, configPath: configPath, maxMemory: maxMemory)
-        return try run(config)
-    }
-    
-    public static func run(_ config: RunXrayRequest) throws -> String {
-        let jsonData = try JSONEncoder().encode(config)
-        let base64String = jsonData.base64EncodedString()
-        let result = LibXrayRunXray(base64String)
-        return result
-    }
-    
-    public static func run<T: Decodable>(datDir: String?, configPath: String?, maxMemory: Int64?, dataType: T.Type) throws -> CallResponse<T> {
-        let config = RunXrayRequest(datDir: datDir, configPath: configPath, maxMemory: maxMemory)
-        let response = try run(config)
-        return try decodeResult(encodedString: response, dataType: T.self)
-    }
-    
-    public static func run<T: Decodable>(_ config: RunXrayRequest, dataType: T.Type) throws -> CallResponse<T> {
-        let response = try run(config)
-        return try decodeResult(encodedString: response, dataType: T.self)
-    }
-    
-    // MARK: - Decode Result CallResponse
-    
-    private static func decodeResult<T: Decodable>(encodedString: String, dataType: T.Type) throws -> CallResponse<T> {
-        guard let data = Data(base64Encoded: encodedString) else {
-            throw DecodeError.invalidBase64
+    public static func invoke(_ requestJSON: String) throws -> String {
+        guard !requestJSON.utf8.contains(0) else {
+            throw LibXrayError.invalidRequest
         }
-        return try JSONDecoder().decode(CallResponse<T>.self, from: data)
-//      ▿ CallResponse<String>
-//        - success : true
-//        - data : nil
-//        - error : nil
-    }
-    
-    private static func serialization(dataBase64: Data) throws -> [String: Any] {
-        
-        guard let decodedString = String(data: dataBase64, encoding: .utf8) else {
-            throw DecodeError.customError("Failed to decode Base64 data into a valid UTF-8 string.")
-        }
-        
-        guard let jsonData = decodedString.data(using: .utf8) else {
-            throw DecodeError.customError("Failed to convert decoded string to JSON data.")
-        }
-        
-        guard let jsonObject = try? JSONSerialization.jsonObject(with: jsonData, options: []),
-              let jsonDict = jsonObject as? [String: Any] else {
-            throw DecodeError.customError("Failed to parse JSON object from data.")
-        }
-        
-        guard let success = jsonDict["success"] as? Int else {
-            throw DecodeError.customError("Missing or invalid 'success' field in the JSON object.")
-        }
-        
-        guard success == 1 else {
-            if let error = jsonDict["error"] as? String {
-                throw DecodeError.customError("Operation failed with error: \(error)")
+        return try requestJSON.withCString { request in
+            guard let response = CGoInvoke(UnsafeMutablePointer(mutating: request)) else {
+                throw LibXrayError.noResponse
             }
-            throw DecodeError.customError("Operation failed with unknown error.")
-        }
-        
-        guard let dataValue = jsonDict["data"] else {
-            throw DecodeError.customError("Missing 'data' field in the JSON object.")
-        }
-        
-        guard let dataString = dataValue as? String else {
-            throw DecodeError.customError("Field 'data' is not a valid string.")
-        }
-        
-        guard let nestedJsonData = dataString.data(using: .utf8) else {
-            throw DecodeError.customError("Failed to convert 'data' string to JSON data.")
-        }
-        
-        guard let dataDict = try? JSONSerialization.jsonObject(with: nestedJsonData, options: []),
-              let finalDict = dataDict as? [String: Any] else {
-            throw DecodeError.customError("Failed to parse nested JSON object from 'data'.")
-        }
-        
-        return finalDict
-    }
-    
-    private static func serialization(stringBase64: String) throws -> [String: Any] {
-        guard let base64Data = Data(base64Encoded: stringBase64) else {
-            throw DecodeError.unknownError
-        }
-        guard let decodedString = String(data: base64Data, encoding: .utf8) else {
-            throw DecodeError.customError("Failed to decode Base64 data into a valid UTF-8 string.")
-        }
-        
-        guard let jsonData = decodedString.data(using: .utf8) else {
-            throw DecodeError.customError("Failed to convert decoded string to JSON data.")
-        }
-        
-        guard let jsonObject = try? JSONSerialization.jsonObject(with: jsonData, options: []),
-              let jsonDict = jsonObject as? [String: Any] else {
-            throw DecodeError.customError("Failed to parse JSON object from data.")
-        }
-        return jsonDict
-    }
-    
-    // MARK: - Stop
-    
-    public static func stop() -> String {
-        let result = LibXrayStopXray()
-        return result
-    }
-    
-    public static func stop<T: Decodable>(dataType: T.Type) throws -> CallResponse<T> {
-        let response = stop()
-        return try decodeResult(encodedString: response, dataType: T.self)
-    }
-    
-    // MARK: - Ping
-    
-//    type pingRequest struct {
-//        DatDir     string `json:"datDir,omitempty"`
-//        ConfigPath string `json:"configPath,omitempty"`
-//        Timeout    int    `json:"timeout,omitempty"`
-//        Url        string `json:"url,omitempty"`
-//        Proxy      string `json:"proxy,omitempty"`
-//    }
-    
-    public static func ping(config: PingRequest) throws -> CallResponse<Int> {
-        let data: String = try ping(config)
-        return try decodeResult(encodedString: data, dataType: Int.self)
-    }
-    
-    public static func ping(_ config: PingRequest) throws -> String {
-        let jsonData = try JSONEncoder().encode(config)
-        let base64String = jsonData.base64EncodedString()
-        let result = LibXrayPing(base64String)
-        return result
-    }
-    
-    // MARK: - Get Free Ports
-    
-    public static func freePorts(_ count: Int) throws -> [Int] {
-        let freePortsBase64String = LibXrayGetFreePorts(count)
-        let result = try decodeResult(encodedString: freePortsBase64String, dataType: [String: [Int]].self)
-        if result.success {
-            return result.data?["ports"] ?? []
-        }
-        if let error = result.error {
-            throw DecodeError.customError(error)
-        }
-        throw DecodeError.unknownError
-    }
-    
-//    // MARK: - Convert Config
-//    
-//    public static func convertLinksToXrayJson(_ config: String) -> String {
-//        return LibXrayConvertShareLinksToXrayJson(config)
-//    }
-    
-    // MARK: - Xray Version
-    
-    public static func version() throws -> CallResponse<String> {
-        let data = LibXrayXrayVersion()
-        return try decodeResult(encodedString: data, dataType: String.self)
-    }
-    
-    // MARK: - Query Stats
-    
-    public static func stats(_ base64TrafficString: String) throws -> [String: Any] {
-        let data = LibXrayQueryStats(base64TrafficString)
-        guard let base64Data = Data(base64Encoded: data) else {
-            throw DecodeError.unknownError
-        }
-        return try serialization(dataBase64: base64Data)
-    }
-    
-    // MARK: - Test Configuration
-    
-    public static func isValidConfig(datDir: String?, configPath: String?) throws -> Bool {
-        let result: [String: Any] = try checkConfig(datDir: datDir, configPath: configPath)
-        guard let success = result["success"] as? Int else {
-            throw DecodeError.customError("Missing or invalid 'success' field in the JSON object.")
-        }
-        if success == 1 {
-            return true
-        } else if let error = result["error"] as? String {
-            throw DecodeError.customError("Operation failed with error: \(error)")
-        } else {
-            throw DecodeError.customError("Operation failed with unknown error.")
-        }
-    }
-    
-    public static func checkConfig(datDir: String?, configPath: String?) throws -> [String: Any] {
-        let data: String = try checkConfiguration(datDir: datDir, configPath: configPath)
-        
-        return try serialization(stringBase64: data)
-    }
-    
-    public static func checkConfiguration(datDir: String?, configPath: String?) throws -> String {
-        let config = СheckRequest(datDir: datDir, configPath: configPath)
-        return try checkConfiguration(config)
-    }
-    
-    public static func checkConfiguration(_ config: СheckRequest) throws -> String {
-        let jsonData = try JSONEncoder().encode(config)
-        let base64String = jsonData.base64EncodedString()
-        let result = LibXrayTestXray(base64String)
-        return result
-    }
-    
-    // MARK: - Convert Share Links To XrayJson
-    
-    public static func convertShareLinkToString(_ link: String) throws -> String {
-        let result = try convertShareLink(link)
-        if result.success == true, let strJson = result.data {
-            return strJson
-        } else if let error = result.error {
-            throw DecodeError.customError(error)
-        }
-        throw DecodeError.customError("Operation failed with unknown error.")
-    }
-    
-    public static func convertShareLink(_ link: String) throws -> CallResponse<String> {
-        
-        let resultDic = try convertShareLinkToDic(link)
-        if (resultDic["success"] as? Int) == 1, let data = resultDic["data"] {
-            let jsonData = try JSONSerialization.data(withJSONObject: data, options: .prettyPrinted)
-            guard let strJson = String(data: jsonData, encoding: .utf8) else {
-                throw DecodeError.customError("Failed to decode JSON data into a UTF-8 string.")
+            defer { CGoFree(response) }
+            guard let result = String(validatingCString: response) else {
+                throw LibXrayError.invalidResponse
             }
-            return CallResponse<String>(success: true, data: strJson, error: nil)
-        } else if (resultDic["success"] as? Int) != 1, let error = resultDic["error"] as? String {
-            return CallResponse<String>(success: false, data: nil, error: error)
-        } else {
-            throw DecodeError.customError("Operation failed with unknown error.")
+            return result
         }
-        
-//        guard let linkData = link.data(using: .utf8) else {
-//            throw DecodeError.customError("Invalid configuration string")
-//        }
-//        let base64EncodedConfig = linkData.base64EncodedString()
-//        let xrayJsonString = LibXrayConvertShareLinksToXrayJson(base64EncodedConfig)
-//        return try decodeResult(encodedString: xrayJsonString, dataType: String.self)
     }
-    
-    public static func convertShareLinkToDic(_ link: String) throws -> [String: Any] {
-        guard let linkData = link.data(using: .utf8) else {
-            throw DecodeError.customError("Invalid configuration string")
+
+    public static func invoke<Payload: Encodable, Result: Decodable>(
+        method: String,
+        payload: Payload,
+        dataType: Result.Type
+    ) throws -> CallResponse<Result> {
+        let request = InvokeRequest(method: method, payload: payload)
+        let data = try JSONEncoder().encode(request)
+        guard let json = String(data: data, encoding: .utf8) else {
+            throw LibXrayError.invalidRequest
         }
-        let base64EncodedConfig = linkData.base64EncodedString()
-        let xrayJsonString = LibXrayConvertShareLinksToXrayJson(base64EncodedConfig)
-        
-        return try serialization(stringBase64: xrayJsonString)
+        let response = try invoke(json)
+        return try JSONDecoder().decode(CallResponse<Result>.self, from: Data(response.utf8))
     }
-    
-    // MARK: - Convert XrayJson To Share Links
-    
-    public static func convertXrayJsonToLink(_ config: String) throws -> String {
-        let result: CallResponse<String> = try convertXrayJson(config)
-        if result.success == true, let link = result.data {
-            return link
-        } else if let error = result.error {
-            throw DecodeError.customError(error)
-        }
-        throw DecodeError.customError("Operation failed with unknown error.")
+
+    public static func run(xrayJson: String) throws -> CallResponse<EmptyResponse> {
+        try invoke(method: "runXray", payload: XrayPayload(xrayJson: xrayJson), dataType: EmptyResponse.self)
     }
-    
-    public static func convertXrayJson(_ config: String) throws -> CallResponse<String> {
-        guard let configData = config.data(using: .utf8) else {
-            throw DecodeError.customError("Invalid configuration")
-        }
-        let base64EncodedConfig = configData.base64EncodedString()
-        let stringBase64 = LibXrayConvertXrayJsonToShareLinks(base64EncodedConfig)
-        
-        return try decodeResult(encodedString: stringBase64, dataType: String.self)
+
+    public static func stop() throws -> CallResponse<EmptyResponse> {
+        try invoke(method: "stopXray", payload: EmptyPayload(), dataType: EmptyResponse.self)
     }
-    
-    public static func convertXrayJson(_ config: String) throws -> String {
-        guard let configData = config.data(using: .utf8) else {
-            throw DecodeError.customError("Invalid configuration")
+
+    public static func test(xrayJson: String) throws -> CallResponse<EmptyResponse> {
+        try invoke(method: "testXray", payload: XrayPayload(xrayJson: xrayJson), dataType: EmptyResponse.self)
+    }
+
+    public static func version() throws -> CallResponse<XrayVersion> {
+        try invoke(method: "xrayVersion", payload: EmptyPayload(), dataType: XrayVersion.self)
+    }
+
+    public static func state() throws -> CallResponse<XrayState> {
+        try invoke(method: "getXrayState", payload: EmptyPayload(), dataType: XrayState.self)
+    }
+
+    public static func freePorts(_ count: Int, excluding ports: [Int] = []) throws -> [Int] {
+        let response = try invoke(
+            method: "getFreePorts",
+            payload: FreePortsPayload(count: count, excludePorts: ports),
+            dataType: FreePortsResponse.self
+        )
+        guard response.success, let data = response.data else {
+            throw LibXrayError.operationFailed(response.error ?? "Missing free ports response.")
         }
-        let base64EncodedConfig = configData.base64EncodedString()
-        let stringBase64 = LibXrayConvertXrayJsonToShareLinks(base64EncodedConfig)
-        
-        guard let base64Data = Data(base64Encoded: stringBase64) else {
-            throw DecodeError.unknownError
+        if let result = data.ports {
+            return result
         }
-        guard let decodedString = String(data: base64Data, encoding: .utf8) else {
-            throw DecodeError.customError("Failed to decode Base64 data into a valid UTF-8 string.")
+        guard count == 0 else {
+            throw LibXrayError.invalidResponse
         }
-        return decodedString
+        return []
+    }
+
+    public static func pingBatch(
+        _ configs: [PingBatchItem],
+        timeout: Int,
+        url: String
+    ) throws -> CallResponse<PingBatchResponse> {
+        try invoke(
+            method: "pingBatch",
+            payload: PingBatchPayload(configs: configs, timeout: timeout, url: url),
+            dataType: PingBatchResponse.self
+        )
     }
 }
 
